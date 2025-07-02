@@ -74,23 +74,16 @@ void AMXInnerProduct::print_timing_stats() const
     std::cout << "\n=== AMX Inner Product Timing Statistics ===\n";
     std::cout << std::fixed << std::setprecision(3);
 
-    std::cout << "Total compute time:        " << std::setw(8) << get_total_compute_time_ms() << " ms\n";
-    std::cout << "- Padding time:          " << std::setw(8) << get_padding_time_ms() << " ms\n";
-    std::cout << "- Conversion time:       " << std::setw(8) << get_conversion_time_ms() << " ms\n";
-    std::cout << "- Chunking time:         " << std::setw(8) << get_chunking_time_ms() << " ms\n";
-    std::cout << "- Multiplication time:   " << std::setw(8) << get_multiplication_time_ms() << " ms\n";
-    std::cout << "  - Result merging time: " << std::setw(8) << get_tile_setup_time_ms() << " ms\n";
-    std::cout << "  - Actual AMX time:     " << std::setw(8) << get_actual_amx_time_ms() << " ms\n";
-    std::cout << "  - Tile load time:      " << std::setw(8) << get_tile_load_time_ms() << " ms\n";
+    std::cout << " Total compute time:        " << std::setw(8) << get_total_compute_time_ms() << " ms\n";
+    std::cout << " - Padding time:            " << std::setw(8) << get_padding_time_ms() << " ms\n";
+    std::cout << " - Chunking time:           " << std::setw(8) << get_chunking_time_ms() << " ms\n";
+    std::cout << "   - Conversion time:       " << std::setw(8) << get_conversion_time_ms() << " ms\n";
+    std::cout << "   - Multiplication time:   " << std::setw(8) << get_multiplication_time_ms() << " ms\n";
+    std::cout << "     - Result merging time: " << std::setw(8) << get_tile_setup_time_ms() << " ms\n";
+    std::cout << "     - Actual AMX time:     " << std::setw(8) << get_actual_amx_time_ms() << " ms\n";
+    std::cout << "     - Tile load time:      " << std::setw(8) << get_tile_load_time_ms() << " ms\n";
 
-    std::cout << "\nCall counts:\n";
-    std::cout << "  - multiplication calls:   " << multiplication_calls << " calls\n";
-
-    if (multiplication_calls > 0)
-    {
-        std::cout << "  - Avg multiplication:     " << std::setw(8) << get_average_multiplication_time_ms() << " ms/call\n";
-    }
-    std::cout << "==========================================\n\n";
+    std::cout << "===========================================\n\n";
 }
 
 // Timing getter methods
@@ -152,12 +145,12 @@ std::vector<std::vector<float>> AMXInnerProduct::compute_inner_products(
     std::vector<std::vector<float>> &data)
 {
 
+    auto start_total = std::chrono::high_resolution_clock::now();
+
     if (!amx_initialized)
     {
         throw std::runtime_error("AMX not initialized. Call initialize() first.");
     }
-
-    auto start_total = std::chrono::high_resolution_clock::now();
 
     // Time padding
     auto start_padding = std::chrono::high_resolution_clock::now();
@@ -257,12 +250,16 @@ void AMXInnerProduct::padVectors(std::vector<std::vector<float>> &vectors)
     int padded_size = (vectors.size() + 15) & ~15;
     vectors.reserve(padded_size);
     vectors.resize(padded_size);
-    
+
     // 2. Optimize inner vector padding
-    for (auto& vec : vectors) {
-        if (vec.empty()) {
+    for (auto &vec : vectors)
+    {
+        if (vec.empty())
+        {
             vec.resize(MAX_COLS);
-        } else {
+        }
+        else
+        {
             size_t current_size = vec.size();
             size_t padded_inner_size = ((current_size + MAX_COLS - 1) / MAX_COLS) * MAX_COLS;
             vec.resize(padded_inner_size);
@@ -286,48 +283,18 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
 
     // Chunk and format centroids
     auto start_conversion = std::chrono::high_resolution_clock::now();
-    const int chunk_size = MAX_COLS * MAX_SIZE;
-    int chunk_idx = 0;
-    int elem_idx = 0;
-
+    int index = 0;
     for (int offset = 0; offset < centroids[0].size(); offset += MAX_COLS)
     {
         for (int i = 0; i < centroids.size(); ++i)
         {
-            // Direct pointer access for better cache performance
-            const float *src = &centroids[i][offset];
-            auto *dest = &centroid_chunk[chunk_idx][elem_idx];
-
-            // Process in chunks of 8 (or 4/16 depending on your SIMD capabilities)
-            int j = 0;
-            for (; j <= MAX_COLS - 8; j += 8)
+            for (int j = 0; j < MAX_COLS; ++j)
             {
-                // Load 8 floats
-                __m256 vals = _mm256_loadu_ps(&src[j]);
-
-                // Convert to bfloat16 (you'd need a SIMD version of your conversion)
-                // This is pseudocode - actual SIMD bfloat16 conversion depends on your CPU
-                for (int k = 0; k < 8; ++k)
-                {
-                    dest[j + k] = float_to_bfloat16(src[j + k]);
-                }
-            }
-
-            // Handle remaining elements
-            for (; j < MAX_COLS; ++j)
-            {
-                dest[j] = float_to_bfloat16(src[j]);
-            }
-
-            elem_idx += MAX_COLS;
-            if (elem_idx >= chunk_size)
-            {
-                elem_idx = 0;
-                ++chunk_idx;
+                centroid_chunk[index / (MAX_COLS * MAX_SIZE)][index % (MAX_COLS * MAX_SIZE)] = float_to_bfloat16(centroids[i][offset + j]);
+                index++;
             }
         }
     }
-
     auto end_conversion = std::chrono::high_resolution_clock::now();
     conversion_time += end_conversion - start_conversion;
 
@@ -355,54 +322,76 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
             end_conversion = std::chrono::high_resolution_clock::now();
             conversion_time += end_conversion - start_conversion;
 
+            auto start_multiply = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < centroid_height; ++i)
             {
-		auto start_multiply = std::chrono::high_resolution_clock::now();
-
                 // Multiplying tiles!
-                auto start_load = std::chrono::high_resolution_clock::now();
+//                auto start_load = std::chrono::high_resolution_clock::now();
                 _tile_zero(1);
                 _tile_loadd(2, centroid_chunk[centroid_id].data(), STRIDE);
                 _tile_loadd(3, data_chunk.data(), STRIDE);
-                auto end_load = std::chrono::high_resolution_clock::now();
-                tile_load_time += end_load - start_load;
+//                auto end_load = std::chrono::high_resolution_clock::now();
+//                tile_load_time += end_load - start_load;
 
-                auto start_AMX = std::chrono::high_resolution_clock::now();
+//                auto start_AMX = std::chrono::high_resolution_clock::now();
                 _tile_dpbf16ps(1, 2, 3);
                 _tile_stored(1, results_chunk, STRIDE);
-                auto end_AMX = std::chrono::high_resolution_clock::now();
-                actual_amx_time += end_AMX - start_AMX;
-                multiplication_calls++;
+//                auto end_AMX = std::chrono::high_resolution_clock::now();
+//                actual_amx_time += end_AMX - start_AMX;
 
-		// Merging results_chunk into results_agg
-                auto start_merge = std::chrono::high_resolution_clock::now();
-                for (int row = 0; row < MAX_SIZE; ++row)
+                // Merge results
+//                auto start_merge = std::chrono::high_resolution_clock::now();
+
+                int col_offset = (id / data_height) * MAX_SIZE;
+
+		for (int row = 0; row < MAX_SIZE; ++row)
                 {
-                    // Prefetch next row
-                    if (row + 1 < MAX_SIZE)
+                    if (row + 2 < MAX_SIZE)
                     {
-                        _mm_prefetch(&results_chunk[(row + 1) * MAX_SIZE], _MM_HINT_T0);
-                        _mm_prefetch(&results_agg[i * MAX_SIZE + (row + 1)][(id / data_height) * MAX_SIZE], _MM_HINT_T0);
+                        _mm_prefetch(&results_chunk[(row + 2) * MAX_SIZE], _MM_HINT_T0);
+                        _mm_prefetch(&results_agg[i * MAX_SIZE + (row + 2)][col_offset], _MM_HINT_T0);
+                    }
+                    float *chunk_row = &results_chunk[row * MAX_SIZE];
+                    float *agg_row = &results_agg[i * MAX_SIZE + row][col_offset];
+
+                    int col = 0;
+                    for (; col <= MAX_SIZE - 16; col += 16)
+                    {
+                        // Load and process first 8 elements
+                        __m256 chunk_vec1 = _mm256_loadu_ps(&chunk_row[col]);
+                        __m256 agg_vec1 = _mm256_loadu_ps(&agg_row[col]);
+                        __m256 result1 = _mm256_add_ps(agg_vec1, chunk_vec1);
+                        _mm256_storeu_ps(&agg_row[col], result1);
+
+                        // Load and process next 8 elements
+                        __m256 chunk_vec2 = _mm256_loadu_ps(&chunk_row[col + 8]);
+                        __m256 agg_vec2 = _mm256_loadu_ps(&agg_row[col + 8]);
+                        __m256 result2 = _mm256_add_ps(agg_vec2, chunk_vec2);
+                        _mm256_storeu_ps(&agg_row[col + 8], result2);
                     }
 
-                    for (int col = 0; col < MAX_SIZE; col += 8)
+                    // Handle remaining elements that don't fit in 16-element chunks
+                    for (; col <= MAX_SIZE - 8; col += 8)
                     {
-                        __m256 chunk_vec = _mm256_loadu_ps(&results_chunk[row * MAX_SIZE + col]);
-                        __m256 agg_vec = _mm256_loadu_ps(&results_agg[i * MAX_SIZE + row][(id / data_height) * MAX_SIZE + col]);
+                        __m256 chunk_vec = _mm256_loadu_ps(&chunk_row[col]);
+                        __m256 agg_vec = _mm256_loadu_ps(&agg_row[col]);
                         __m256 result = _mm256_add_ps(agg_vec, chunk_vec);
-                        _mm256_storeu_ps(&results_agg[i * MAX_SIZE + row][(id / data_height) * MAX_SIZE + col], result);
+                        _mm256_storeu_ps(&agg_row[col], result);
+                    }
+
+                    // Handle any remaining elements (if MAX_SIZE is not divisible by 8)
+                    for (; col < MAX_SIZE; ++col)
+                    {
+                        agg_row[col] += chunk_row[col];
                     }
                 }
-                auto end_merge = std::chrono::high_resolution_clock::now();
-
-		tile_setup_time += end_merge - start_merge;
+//                auto end_merge = std::chrono::high_resolution_clock::now();
+//                tile_setup_time += end_merge - start_merge;
 
                 centroid_id = (centroid_id + 1) % centroid_chunk.size();
-            
-		auto end_multiply = std::chrono::high_resolution_clock::now();
-                multiplication_time += end_multiply - start_multiply;
-
-	    }
+            }
+            auto end_multiply = std::chrono::high_resolution_clock::now();
+            multiplication_time += end_multiply - start_multiply;
 
             id++;
         }

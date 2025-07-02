@@ -13,9 +13,9 @@
 #include <chrono>
 
 // Define these constants based on your data
-const int dim = 512;                                                                               // Adjust to your embedding dimension
-const int max_elements = 1000000;                                                                  // Maximum number of vectors to load
-const int num_centroids = 100;
+const int dim = 1024;                                                                               // Adjust to your embedding dimension
+const int max_elements = 960000;                                                                  // Maximum number of vectors to load
+const int num_centroids = 1600;
 const std::string dataroot = "/mnt/ceph/district9/dataset/openai/openai_large_5m/"; // Set your data directory
 
 static void differenceAnalyzer(std::vector<std::vector<float>> scalar_results, std::vector<std::vector<float>> AMX_results) {
@@ -160,7 +160,7 @@ int main()
 
     auto scalar_start = std::chrono::high_resolution_clock::now();
     ScalarInnerProduct scalar_calculator;
-    std::vector<std::vector<float>> scalar_results = scalar_calculator.compute(random_centroids, data);
+//    std::vector<std::vector<float>> scalar_results = scalar_calculator.compute(random_centroids, data);
     auto scalar_end = std::chrono::high_resolution_clock::now();
 
     // Print timing information
@@ -180,7 +180,7 @@ int main()
     std::cout << "HNSWLIB runtime + Preprocessing took: " << hnsw_duration.count() + init_duration.count() << " microseconds\n" << std::endl;
 
     amx_calculator.print_timing_stats();
-    differenceAnalyzer(scalar_results, AMX_results);
+//    differenceAnalyzer(scalar_results, AMX_results);
 
 //    amx_calculator.print_float_vectors(AMX_results);
 //    scalar_calculator.printMatrix(scalar_results);
