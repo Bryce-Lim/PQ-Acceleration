@@ -6,6 +6,10 @@
 #include <iomanip>
 #include <cmath>
 #include <cassert>
+#include <thread>
+#include <atomic>
+#include <omp.h>
+#include <climits>
 
 BatchInnerProductCalculator::BatchInnerProductCalculator(int dim) : dimension(dim) {
     space = new hnswlib::InnerProductSpace(dimension);
@@ -18,6 +22,57 @@ BatchInnerProductCalculator::BatchInnerProductCalculator(int dim) : dimension(di
 
 BatchInnerProductCalculator::~BatchInnerProductCalculator() {
     delete space;
+}
+
+// Thread control methods
+void BatchInnerProductCalculator::setThreadCount(int num_threads) {
+    if (num_threads <= 0) {
+        // Reset to default (use all available threads)
+        omp_set_num_threads(0);
+        std::cout << "HNSWLIB threads reset to default (all available)" << std::endl;
+    } else {
+        omp_set_num_threads(num_threads);
+        std::cout << "HNSWLIB threads set to: " << num_threads << std::endl;
+    }
+}
+
+int BatchInnerProductCalculator::getThreadCount() const {
+    return omp_get_max_threads();
+}
+
+void BatchInnerProductCalculator::printThreadInfo() const {
+    std::cout << "\n=== HNSWLIB Threading Information ===" << std::endl;
+    
+    // OpenMP thread info
+    #ifdef _OPENMP
+    std::cout << "OpenMP: ENABLED" << std::endl;
+    std::cout << "OpenMP max threads: " << omp_get_max_threads() << std::endl;
+    std::cout << "OpenMP num procs: " << omp_get_num_procs() << std::endl;
+    
+    // Test actual threads in parallel region
+    #pragma omp parallel
+    {
+        #pragma omp single
+        {
+            std::cout << "OpenMP threads in parallel region: " << omp_get_num_threads() << std::endl;
+        }
+    }
+    #else
+    std::cout << "OpenMP: DISABLED" << std::endl;
+    #endif
+    
+    // Hardware info
+    std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << std::endl;
+    std::cout << "=========================================" << std::endl;
+}
+
+void BatchInnerProductCalculator::testThreadControl() {
+    std::cout << "Testing thread control..." << std::endl;
+    
+    for (int i = 1; i <= 8; ++i) {
+        setThreadCount(i);
+        std::cout << "Set: " << i << ", Got: " << getThreadCount() << std::endl;
+    }
 }
 
 std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProducts(
@@ -83,7 +138,7 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     const size_t centroid_block_size = 8;  // Process 8 centroids at a time
     const size_t data_block_size = 64;     // Process 64 data points at a time
 
-//    #pragma omp parallel for collapse(2) schedule(dynamic)
+    #pragma omp parallel for collapse(2) schedule(dynamic)
     for (size_t ci = 0; ci < num_centroids; ci += centroid_block_size) {
         for (size_t dj = 0; dj < num_data; dj += data_block_size) {
             
@@ -105,6 +160,149 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     }
 
     return results;
+}
+
+// Enhanced calculateInnerProductsOptimized with explicit thread control
+std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProductsOptimizedThreaded(
+    const std::vector<std::vector<float>>& centroids,
+    const std::vector<std::vector<float>>& data,
+    int num_threads) {
+
+    // Set thread count for this computation
+    int original_threads = omp_get_max_threads();
+    if (num_threads > 0) {
+        omp_set_num_threads(num_threads);
+    }
+
+    const size_t num_centroids = centroids.size();
+    const size_t num_data = data.size();
+    
+    std::cout << "HNSWLIB using " << omp_get_max_threads() << " threads for " 
+              << num_centroids << " x " << num_data << " computation" << std::endl;
+    
+    // Pre-allocate results
+    std::vector<std::vector<float>> results(num_centroids);
+    for (size_t i = 0; i < num_centroids; ++i) {
+        results[i].resize(num_data);
+    }
+
+    // Block/tile processing for better cache locality
+    const size_t centroid_block_size = 8;
+    const size_t data_block_size = 64;
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // Monitor active threads
+    std::atomic<int> active_threads(0);
+    std::atomic<int> max_active_threads(0);
+
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for (size_t ci = 0; ci < num_centroids; ci += centroid_block_size) {
+        for (size_t dj = 0; dj < num_data; dj += data_block_size) {
+            
+            // Monitor thread activity
+            int current_threads = ++active_threads;
+            int prev_max = max_active_threads.load();
+            while (current_threads > prev_max && 
+                   !max_active_threads.compare_exchange_weak(prev_max, current_threads)) {
+                prev_max = max_active_threads.load();
+            }
+            
+            size_t ci_end = std::min(ci + centroid_block_size, num_centroids);
+            size_t dj_end = std::min(dj + data_block_size, num_data);
+            
+            // Process block
+            for (size_t i = ci; i < ci_end; ++i) {
+                const float* centroid_data = centroids[i].data();
+                float* result_row = results[i].data();
+                
+                for (size_t j = dj; j < dj_end; ++j) {
+                    const float* data_vec = data[j].data();
+                    float distance = dist_func(centroid_data, data_vec, dist_func_param);
+                    result_row[j] = 1.0f - distance;
+                }
+            }
+            
+            --active_threads;
+        }
+    }
+    
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    
+    std::cout << "HNSWLIB (" << omp_get_max_threads() << " threads) took: " 
+              << duration.count() << " microseconds" << std::endl;
+    std::cout << "Maximum concurrent threads observed: " << max_active_threads.load() << std::endl;
+
+    // Restore original thread count
+    omp_set_num_threads(original_threads);
+
+    return results;
+}
+
+// Method to test optimal thread count for HNSWLIB
+int BatchInnerProductCalculator::findOptimalThreadCount(
+    const std::vector<std::vector<float>>& centroids,
+    const std::vector<std::vector<float>>& data) {
+    
+    std::cout << "\n=== Finding Optimal Thread Count for HNSWLIB ===" << std::endl;
+    
+    std::vector<int> thread_counts = {1, 2, 4, 6, 8, 12, 16};
+    int best_threads = 1;
+    long best_time = LONG_MAX;
+    
+    for (int num_threads : thread_counts) {
+        if (num_threads > std::thread::hardware_concurrency()) {
+            continue;
+        }
+        
+        std::cout << "Testing " << num_threads << " threads..." << std::endl;
+        
+        // Test this thread count
+        auto start = std::chrono::high_resolution_clock::now();
+        auto results = calculateInnerProductsOptimizedThreaded(centroids, data, num_threads);
+        auto end = std::chrono::high_resolution_clock::now();
+        
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        long time_us = duration.count();
+        
+        std::cout << "  " << num_threads << " threads: " << time_us << " μs";
+        
+        if (time_us < best_time) {
+            best_time = time_us;
+            best_threads = num_threads;
+            std::cout << " (NEW BEST)";
+        }
+        std::cout << std::endl;
+    }
+    
+    std::cout << "Optimal thread count: " << best_threads << " (" << best_time << " μs)" << std::endl;
+    return best_threads;
+}
+
+void BatchInnerProductCalculator::benchmarkThreadScaling(
+    const std::vector<std::vector<float>>& centroids,
+    const std::vector<std::vector<float>>& data) {
+    
+    std::cout << "\n=== HNSWLIB Thread Scaling Benchmark ===" << std::endl;
+    
+    // Test different thread counts
+    std::vector<int> thread_counts = {1, 2, 4, 6, 8, 12, 16};
+    
+    for (int num_threads : thread_counts) {
+        if (num_threads > std::thread::hardware_concurrency()) {
+            continue;
+        }
+        
+        std::cout << "\nTesting HNSWLIB with " << num_threads << " threads..." << std::endl;
+        
+        auto start = std::chrono::high_resolution_clock::now();
+        auto results = calculateInnerProductsOptimizedThreaded(centroids, data, num_threads);
+        auto end = std::chrono::high_resolution_clock::now();
+        
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        std::cout << "  " << num_threads << " threads: " << duration.count() << " microseconds" << std::endl;
+    }
 }
 
 std::vector<float> BatchInnerProductCalculator::calculateWithSingleCentroid(

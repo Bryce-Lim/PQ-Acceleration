@@ -1,7 +1,7 @@
-# Makefile for AMX Inner Product with Arrow/Parquet support
+# Makefile for AMX Inner Product with Arrow/Parquet support and Threading
 CXX = g++
-CXXFLAGS = -flax-vector-conversions -fopenmp -std=c++17 -O2 -march=native -fno-strict-aliasing -mavx512bf16
-LIBS = -larrow -lparquet
+CXXFLAGS = -flax-vector-conversions -fopenmp -std=c++17 -O2 -march=native -fno-strict-aliasing -mavx512bf16 -pthread
+LIBS = -larrow -lparquet -pthread
 
 # Find Arrow/Parquet include directories
 ARROW_INCLUDE = $(shell pkg-config --cflags arrow)
@@ -24,7 +24,7 @@ ifeq ($(PARQUET_LIBS),)
 endif
 
 INCLUDES = $(ARROW_INCLUDE) $(PARQUET_INCLUDE)
-ALL_LIBS = $(ARROW_LIBS) $(PARQUET_LIBS)
+ALL_LIBS = $(ARROW_LIBS) $(PARQUET_LIBS) -pthread
 
 # Object files
 OBJECTS = large_testing.o AMXInnerProduct.o ScalarInnerProduct.o BatchInnerProductCalculator.o
@@ -47,7 +47,22 @@ large_testing.o: large_testing.cpp AMXInnerProduct.h ScalarInnerProduct.h BatchI
 large_testing: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) $(ALL_LIBS) -o large_testing
 
+# Debug version with additional debugging symbols
+debug: CXXFLAGS += -g -DDEBUG -O0
+debug: large_testing
+
+# Clean up
 clean:
 	rm -f *.o large_testing
 
-.PHONY: all clean
+# Run with different thread counts for testing
+test-threads: large_testing
+	@echo "Running single-threaded test..."
+	@./large_testing
+	@echo "Testing completed."
+
+# Memory usage analysis
+valgrind-check: large_testing
+	valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all ./large_testing
+
+.PHONY: all clean debug test-threads valgrind-check

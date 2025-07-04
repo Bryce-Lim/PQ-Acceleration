@@ -38,6 +38,32 @@ public:
         const std::vector<std::vector<float>>& centroids,
         const std::vector<std::vector<float>>& data);
     
+    // Thread control methods
+    void setThreadCount(int num_threads);
+    int getThreadCount() const;
+    
+    // Threaded calculation with explicit thread count
+    std::vector<std::vector<float>> calculateInnerProductsOptimizedThreaded(
+        const std::vector<std::vector<float>>& centroids,
+        const std::vector<std::vector<float>>& data,
+        int num_threads = 0);
+    
+    // Threading information and diagnostics
+    void printThreadInfo() const;
+    
+    // Find optimal thread count
+    int findOptimalThreadCount(
+        const std::vector<std::vector<float>>& centroids,
+        const std::vector<std::vector<float>>& data);
+    
+    // Test thread control
+    void testThreadControl();
+    
+    // Enhanced benchmarking with thread scaling
+    void benchmarkThreadScaling(
+        const std::vector<std::vector<float>>& centroids,
+        const std::vector<std::vector<float>>& data);
+    
     // Utility functions
     std::vector<float> calculateWithSingleCentroid(
         const std::vector<float>& centroid,

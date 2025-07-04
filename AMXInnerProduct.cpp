@@ -23,6 +23,9 @@
 #include <vector>
 #include <immintrin.h>
 #include <cstdint>
+#include <thread>
+#include <future>
+#include <atomic>
 
 // Constructor
 AMXInnerProduct::AMXInnerProduct() : amx_initialized(false)
@@ -233,12 +236,12 @@ bool AMXInnerProduct::set_tiledata_use()
 {
     if (syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA))
     {
-        printf("\n Fail to do XFEATURE_XTILEDATA \n\n");
+        //printf("\n Fail to do XFEATURE_XTILEDATA \n\n");
         return false;
     }
     else
     {
-        printf("\n TILE DATA USE SET - OK \n\n");
+        //printf("\n TILE DATA USE SET - OK \n\n");
         return true;
     }
 }
@@ -472,4 +475,177 @@ void AMXInnerProduct::print_float_vectors(const std::vector<std::vector<float>> 
         std::cout << "]\n";
     }
     std::cout << "\n";
+}
+
+std::vector<std::vector<float>> AMXInnerProduct::compute_inner_products_threaded(
+    std::vector<std::vector<float>>& centroids,
+    std::vector<std::vector<float>>& data,
+    int num_threads
+) {
+    auto start_total = std::chrono::high_resolution_clock::now();
+    
+    if (num_threads == 0) {
+        num_threads = calculate_optimal_threads(data.size());
+    }
+    
+    // For small datasets, single-threaded is more efficient
+    if (data.size() < 10000 || num_threads == 1) {
+        return compute_inner_products(centroids, data);
+    }
+    
+    std::cout << "Using " << num_threads << " threads for computation" << std::endl;
+    
+    // Calculate partition sizes
+    const size_t data_per_thread = (data.size() + num_threads - 1) / num_threads;
+    std::vector<std::future<ThreadResult>> futures;
+    
+    // Launch threads
+    for (int t = 0; t < num_threads; ++t) {
+        size_t start_idx = t * data_per_thread;
+        size_t end_idx = std::min(start_idx + data_per_thread, data.size());
+        
+        if (start_idx >= end_idx) continue;
+        
+        // Create data partition
+        std::vector<std::vector<float>> data_partition(
+            data.begin() + start_idx,
+            data.begin() + end_idx
+        );
+        
+        // Launch async computation
+        futures.emplace_back(
+            std::async(std::launch::async, [centroids, data_partition, t]() -> ThreadResult {
+                ThreadResult result;
+                auto thread_start = std::chrono::high_resolution_clock::now();
+                
+                try {
+                    result.results = compute_data_partition(centroids, data_partition, t);
+                    result.success = true;
+                } catch (const std::exception& e) {
+                    result.success = false;
+                    result.error_message = "Thread " + std::to_string(t) + " error: " + e.what();
+                }
+                
+                auto thread_end = std::chrono::high_resolution_clock::now();
+                result.compute_time = thread_end - thread_start;
+                return result;
+            })
+        );
+    }
+    
+    // Collect results
+    std::vector<ThreadResult> thread_results;
+    for (auto& future : futures) {
+        thread_results.push_back(future.get());
+    }
+    
+    // Check for errors
+    for (const auto& result : thread_results) {
+        if (!result.success) {
+            throw std::runtime_error(result.error_message);
+        }
+    }
+    
+    // Merge results
+    std::vector<std::vector<float>> final_result(centroids.size());
+    for (size_t i = 0; i < centroids.size(); ++i) {
+        final_result[i].reserve(data.size());
+    }
+    
+    for (const auto& result : thread_results) {
+        for (size_t i = 0; i < centroids.size(); ++i) {
+            if (i < result.results.size()) {
+                final_result[i].insert(
+                    final_result[i].end(),
+                    result.results[i].begin(),
+                    result.results[i].end()
+                );
+            }
+        }
+    }
+    
+    auto end_total = std::chrono::high_resolution_clock::now();
+    total_compute_time += end_total - start_total;
+    compute_calls++;
+    
+    return final_result;
+}
+
+// Static method for thread-safe computation
+std::vector<std::vector<float>> AMXInnerProduct::compute_data_partition(
+    const std::vector<std::vector<float>>& centroids,
+    const std::vector<std::vector<float>>& data_partition,
+    int thread_id
+) {
+    // Each thread creates its own AMX instance
+    AMXInnerProduct thread_amx;
+    
+    if (!thread_amx.initialize()) {
+        throw std::runtime_error("Failed to initialize AMX for thread " + std::to_string(thread_id));
+    }
+    
+    // Make local copies to avoid threading issues
+    std::vector<std::vector<float>> local_centroids = centroids;
+    std::vector<std::vector<float>> local_data = data_partition;
+    
+    return thread_amx.compute_inner_products(local_centroids, local_data);
+}
+
+int AMXInnerProduct::calculate_optimal_threads(size_t data_size, size_t available_memory) {
+    int max_threads = std::thread::hardware_concurrency();
+    
+    // Conservative threading based on data size
+    if (data_size < 50000) {
+        return 1;
+    } else if (data_size < 200000) {
+        return std::min(2, max_threads);
+    } else if (data_size < 500000) {
+        return std::min(4, max_threads);
+    } else {
+        return std::min(224, max_threads);
+    }
+}
+
+void AMXInnerProduct::benchmark_thread_scaling(
+    std::vector<std::vector<float>>& centroids,
+    std::vector<std::vector<float>>& data
+) {
+    std::cout << "\n=== AMX Thread Scaling Benchmark ===" << std::endl;
+    
+    std::vector<int> thread_counts = {1, 2, 4, 6, 8, 12, 16, 32};
+    std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << std::endl;
+    
+    for (int num_threads : thread_counts) {
+        if (num_threads > std::thread::hardware_concurrency()) {
+            continue;
+        }
+        
+        std::cout << "\nTesting with " << num_threads << " threads..." << std::endl;
+        
+        // Make copies for each test
+        std::vector<std::vector<float>> centroids_copy = centroids;
+        std::vector<std::vector<float>> data_copy = data;
+        
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        try {
+            auto results = compute_inner_products_threaded(centroids_copy, data_copy, num_threads);
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            
+            std::cout << "  " << num_threads << " threads: " << duration.count() << " microseconds";
+            
+            // Calculate speedup vs single-threaded
+            if (num_threads > 1) {
+                // You'd store the single-threaded baseline for comparison
+                // For now, just show the timing
+                std::cout << " (result dimensions: " << results.size() << " x " << results[0].size() << ")";
+            }
+            std::cout << std::endl;
+            
+        } catch (const std::exception& e) {
+            std::cout << "  " << num_threads << " threads: FAILED - " << e.what() << std::endl;
+        }
+    }
 }

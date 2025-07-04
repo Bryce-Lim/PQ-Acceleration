@@ -12,6 +12,7 @@
 #ifndef AMX_INNER_PRODUCT_H
 #define AMX_INNER_PRODUCT_H
 
+#include <string>
 #include <vector>
 #include <immintrin.h>
 #include <stdint.h>
@@ -80,6 +81,19 @@ private:
     static void padVectors(std::vector<std::vector<float>> &vectors);
     bool set_tiledata_use();
 
+    // Add these helper methods
+    int calculate_optimal_threads(size_t data_size, size_t available_memory = 0);
+    
+    // Thread result structure
+    struct ThreadResult {
+        std::vector<std::vector<float>> results;
+        std::chrono::duration<double> compute_time;
+        bool success;
+        std::string error_message;
+        
+        ThreadResult() : success(false) {}
+    };
+
 public:
     // Constructor and destructor
     AMXInnerProduct();
@@ -118,6 +132,27 @@ public:
 
     // Check if AMX is properly initialized
     bool is_initialized() const { return amx_initialized; }
+
+    // Multi-threaded interface using data partitioning
+    std::vector<std::vector<float>> compute_inner_products_threaded(
+        std::vector<std::vector<float>>& centroids,
+        std::vector<std::vector<float>>& data,
+        int num_threads = 0
+    );
+    
+    // Static method for thread-safe computation
+    static std::vector<std::vector<float>> compute_data_partition(
+        const std::vector<std::vector<float>>& centroids,
+        const std::vector<std::vector<float>>& data_partition,
+        int thread_id
+    );
+    
+    // Benchmark different thread counts
+    void benchmark_thread_scaling(
+        std::vector<std::vector<float>>& centroids,
+        std::vector<std::vector<float>>& data
+    );
+
 };
 
 #endif
