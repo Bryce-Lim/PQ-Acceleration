@@ -18,7 +18,7 @@
 
 // Define these constants based on your data
 const int dim = 1024;
-const int max_elements = 806400;
+const int max_elements = 985600;
 const int num_centroids = 1600;
 const int rounds = 10;
 const std::vector<int> thread_tests = {60, 80, 100, 112, 120, 160, 200, 224};
@@ -431,7 +431,7 @@ int main()
     for (int i = 0; i < rounds; i++)
     {
         start = std::chrono::high_resolution_clock::now();
-
+        std::vector<std::vector<float>> single_run_AMX_results;
         try
         {
             threaded_AMX_results = threaded_amx.compute_inner_products_threaded(centroids_copy, data_copy);
@@ -446,6 +446,7 @@ int main()
         auto threaded_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         std::cout << "Multi-threaded AMX took: " << threaded_duration.count() << " microseconds" << std::endl;
         total_time += threaded_duration.count();
+        threaded_AMX_results = single_run_AMX_results;
     }
     std::cout << "AVERAGE Multi-threaded AMX took: " << total_time / rounds << " microseconds" << std::endl;
 
