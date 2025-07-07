@@ -64,16 +64,6 @@ public:
         const std::vector<std::vector<float>>& centroids,
         const std::vector<std::vector<float>>& data);
     
-    // Utility functions
-    std::vector<float> calculateWithSingleCentroid(
-        const std::vector<float>& centroid,
-        const std::vector<std::vector<float>>& data);
-    
-    std::vector<std::vector<std::pair<float, size_t>>> findTopKSimilar(
-        const std::vector<std::vector<float>>& centroids,
-        const std::vector<std::vector<float>>& data,
-        int k);
-    
     // Benchmarking
     void benchmark(const std::vector<std::vector<float>>& centroids,
                    const std::vector<std::vector<float>>& data,

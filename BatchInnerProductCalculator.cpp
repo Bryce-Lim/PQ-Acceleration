@@ -168,6 +168,8 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     const std::vector<std::vector<float>>& data,
     int num_threads) {
 
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     // Set thread count for this computation
     int original_threads = omp_get_max_threads();
     if (num_threads > 0) {
@@ -189,8 +191,6 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     // Block/tile processing for better cache locality
     const size_t centroid_block_size = 8;
     const size_t data_block_size = 64;
-
-    auto start_time = std::chrono::high_resolution_clock::now();
 
     // Monitor active threads
     std::atomic<int> active_threads(0);
@@ -303,60 +303,6 @@ void BatchInnerProductCalculator::benchmarkThreadScaling(
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         std::cout << "  " << num_threads << " threads: " << duration.count() << " microseconds" << std::endl;
     }
-}
-
-std::vector<float> BatchInnerProductCalculator::calculateWithSingleCentroid(
-    const std::vector<float>& centroid,
-    const std::vector<std::vector<float>>& data) {
-    
-    if (centroid.size() != dimension) {
-        throw std::invalid_argument("Centroid dimension mismatch");
-    }
-    
-    std::vector<float> results;
-    results.reserve(data.size());
-    
-    const float* centroid_data = centroid.data();
-    
-    for (const auto& vec : data) {
-        if (vec.size() != dimension) {
-            throw std::invalid_argument("Data vector dimension mismatch");
-        }
-        
-        const float* data_vec = vec.data();
-        float distance = dist_func(centroid_data, data_vec, dist_func_param);
-        results.push_back(1.0f - distance);
-    }
-    
-    return results;
-}
-
-std::vector<std::vector<std::pair<float, size_t>>> BatchInnerProductCalculator::findTopKSimilar(
-    const std::vector<std::vector<float>>& centroids,
-    const std::vector<std::vector<float>>& data,
-    int k) {
-    
-    auto all_products = calculateInnerProducts(centroids, data);
-    std::vector<std::vector<std::pair<float, size_t>>> top_k_results;
-    
-    for (size_t i = 0; i < centroids.size(); ++i) {
-        std::vector<std::pair<float, size_t>> similarities;
-        
-        for (size_t j = 0; j < data.size(); ++j) {
-            similarities.emplace_back(all_products[i][j], j);
-        }
-        
-        // Sort by similarity (descending) and keep top-k
-        std::partial_sort(similarities.begin(), 
-                        similarities.begin() + std::min(k, (int)similarities.size()),
-                        similarities.end(),
-                        [](const auto& a, const auto& b) { return a.first > b.first; });
-        
-        similarities.resize(std::min(k, (int)similarities.size()));
-        top_k_results.push_back(std::move(similarities));
-    }
-    
-    return top_k_results;
 }
 
 void BatchInnerProductCalculator::benchmark(

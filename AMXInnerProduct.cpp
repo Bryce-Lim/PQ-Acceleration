@@ -547,19 +547,36 @@ std::vector<std::vector<float>> AMXInnerProduct::compute_inner_products_threaded
     }
     
     // Merge results
-    std::vector<std::vector<float>> final_result(centroids.size());
-    for (size_t i = 0; i < centroids.size(); ++i) {
-        final_result[i].reserve(data.size());
+    std::vector<std::vector<float>> final_result(centroids.size(),
+                                                 std::vector<float>(data.size()));
+
+    // Calculate partition sizes upfront
+    std::vector<size_t> partition_start_indices(num_threads + 1);
+    for (int t = 0; t <= num_threads; ++t)
+    {
+        partition_start_indices[t] = std::min((size_t)t * data_per_thread, data.size());
     }
-    
-    for (const auto& result : thread_results) {
-        for (size_t i = 0; i < centroids.size(); ++i) {
-            if (i < result.results.size()) {
-                final_result[i].insert(
-                    final_result[i].end(),
-                    result.results[i].begin(),
-                    result.results[i].end()
-                );
+
+    // Direct copy with known indices - much faster than insert()
+    #pragma omp parallel for
+    for (int t = 0; t < num_threads; ++t)
+    {
+        if (!thread_results[t].success)
+            continue;
+
+        size_t start_idx = partition_start_indices[t];
+        size_t partition_size = partition_start_indices[t + 1] - start_idx;
+
+        for (size_t i = 0; i < centroids.size(); ++i)
+        {
+            if (i < thread_results[t].results.size() &&
+                thread_results[t].results[i].size() == partition_size)
+            {
+
+                // Direct memcpy for maximum speed
+                std::memcpy(&final_result[i][start_idx],
+                            thread_results[t].results[i].data(),
+                            partition_size * sizeof(float));
             }
         }
     }
