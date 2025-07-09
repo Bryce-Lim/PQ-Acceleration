@@ -383,8 +383,7 @@ int main()
 
     // Print initialization timing
     auto init_duration = std::chrono::duration_cast<std::chrono::microseconds>(init_end - init_start);
-    std::cout << "Preprocessing / Initialization took: " << init_duration.count() << " microseconds\n"
-              << std::endl;
+    std::cout << "Preprocessing / Initialization took: " << init_duration.count() << " microseconds\n" << std::endl;
 
     // =========================
     // BENCHMARK COMPARISONS
@@ -416,7 +415,6 @@ int main()
     auto single_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     std::cout << "Single-threaded AMX took: " << single_duration.count() << " microseconds" << std::endl;
 
-    // Print detailed timing from single-threaded AMX
     single_amx.print_timing_stats();
 
     // 2. Multi-threaded AMX with data partitioning
@@ -431,7 +429,6 @@ int main()
     for (int i = 0; i < rounds; i++)
     {
         start = std::chrono::high_resolution_clock::now();
-        std::vector<std::vector<float>> single_run_AMX_results;
         try
         {
             threaded_AMX_results = threaded_amx.compute_inner_products_threaded(centroids_copy, data_copy);
@@ -446,7 +443,6 @@ int main()
         auto threaded_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         std::cout << "Multi-threaded AMX took: " << threaded_duration.count() << " microseconds" << std::endl;
         total_time += threaded_duration.count();
-        threaded_AMX_results = single_run_AMX_results;
     }
     std::cout << "AVERAGE Multi-threaded AMX took: " << total_time / rounds << " microseconds" << std::endl;
 
@@ -459,6 +455,7 @@ int main()
     std::vector<long> hnswlib_times;
 
     total_time = 0;
+    std::vector<std::vector<float>> HNSWLIB_results;
     for (int i = 0; i < rounds; i++) {
         for (int threads : hnswlib_thread_counts)
         {
@@ -468,14 +465,14 @@ int main()
             std::cout << "\nTesting HNSWLIB with " << threads << " threads:" << std::endl;
 
             auto hnsw_start = std::chrono::high_resolution_clock::now();
-            auto hnsw_results = calculator.calculateInnerProductsOptimizedThreaded(
-                random_centroids, data, threads);
+            auto hnsw_results = calculator.calculateInnerProductsOptimizedThreaded(random_centroids, data, threads);
             auto hnsw_end = std::chrono::high_resolution_clock::now();
 
             auto hnsw_duration = std::chrono::duration_cast<std::chrono::microseconds>(hnsw_end - hnsw_start);
             hnswlib_times.push_back(hnsw_duration.count());
             std::cout << "HNSWLIB (" << threads << " threads): " << hnsw_duration.count() << " μs" << std::endl;
             total_time += hnsw_duration.count();
+            HNSWLIB_results = hnsw_results;
         }
     }
     std::cout << "AVERAGE HNSWLIB: " << total_time / rounds << " μs" << std::endl;
@@ -485,7 +482,7 @@ int main()
     // =========================
 
     // std::cout << "\n=== Performance Analysis ===" << std::endl;
-    // 
+    //
     // // Calculate speedups
     // if (single_duration.count() > 0 && threaded_duration.count() > 0)
     // {
@@ -502,10 +499,10 @@ int main()
     // }
 
     // Accuracy comparison
-    if (!single_AMX_results.empty() && !threaded_AMX_results.empty())
+    if (!HNSWLIB_results.empty() && !threaded_AMX_results.empty())
     {
         std::cout << "\n=== Accuracy Verification ===" << std::endl;
-        differenceAnalyzer(single_AMX_results, threaded_AMX_results);
+        differenceAnalyzer(HNSWLIB_results, threaded_AMX_results);
     }
 
     // Thread scaling benchmarks
