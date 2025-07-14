@@ -1,7 +1,7 @@
 # Makefile for AMX Inner Product with Arrow/Parquet support and Threading
 CXX = g++
 CXXFLAGS = -flax-vector-conversions -fopenmp -std=c++17 -O2 -march=native -fno-strict-aliasing -mavx512bf16 -pthread
-LIBS = -larrow -lparquet -pthread
+LIBS = -larrow -lparquet -pthread -lnuma
 
 # Find Arrow/Parquet include directories
 ARROW_INCLUDE = $(shell pkg-config --cflags arrow)
@@ -24,7 +24,8 @@ ifeq ($(PARQUET_LIBS),)
 endif
 
 INCLUDES = $(ARROW_INCLUDE) $(PARQUET_INCLUDE)
-ALL_LIBS = $(ARROW_LIBS) $(PARQUET_LIBS) -pthread
+# IMPORTANT: Make sure -lnuma is included here
+ALL_LIBS = $(ARROW_LIBS) $(PARQUET_LIBS) -pthread -lnuma
 
 # Object files
 OBJECTS = large_testing.o AMXInnerProduct.o ScalarInnerProduct.o BatchInnerProductCalculator.o
@@ -33,7 +34,7 @@ OBJECTS = large_testing.o AMXInnerProduct.o ScalarInnerProduct.o BatchInnerProdu
 all: large_testing
 
 AMXInnerProduct.o: AMXInnerProduct.cpp AMXInnerProduct.h
-	$(CXX) $(CXXFLAGS) -c AMXInnerProduct.cpp -o AMXInnerProduct.o
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c AMXInnerProduct.cpp -o AMXInnerProduct.o
 
 ScalarInnerProduct.o: ScalarInnerProduct.cpp ScalarInnerProduct.h
 	$(CXX) $(CXXFLAGS) -c ScalarInnerProduct.cpp -o ScalarInnerProduct.o
@@ -44,6 +45,7 @@ BatchInnerProductCalculator.o: BatchInnerProductCalculator.cpp BatchInnerProduct
 large_testing.o: large_testing.cpp AMXInnerProduct.h ScalarInnerProduct.h BatchInnerProductCalculator.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c large_testing.cpp -o large_testing.o
 
+# CRITICAL: This is where the linking happens - make sure ALL_LIBS includes -lnuma
 large_testing: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(OBJECTS) $(ALL_LIBS) -o large_testing
 
@@ -65,4 +67,14 @@ test-threads: large_testing
 valgrind-check: large_testing
 	valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all ./large_testing
 
-.PHONY: all clean debug test-threads valgrind-check
+# Test NUMA linking specifically
+test-numa:
+	@echo "Testing NUMA compilation..."
+	@echo '#include <numa.h>' > test_numa.cpp
+	@echo '#include <iostream>' >> test_numa.cpp
+	@echo 'int main() { std::cout << "NUMA available: " << numa_available() << std::endl; return 0; }' >> test_numa.cpp
+	$(CXX) $(CXXFLAGS) test_numa.cpp -lnuma -o test_numa
+	./test_numa
+	rm -f test_numa test_numa.cpp
+
+.PHONY: all clean debug test-threads valgrind-check test-numa

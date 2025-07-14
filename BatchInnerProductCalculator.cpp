@@ -138,7 +138,7 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     const size_t centroid_block_size = 8;  // Process 8 centroids at a time
     const size_t data_block_size = 64;     // Process 64 data points at a time
 
-    #pragma omp parallel for collapse(2) schedule(dynamic)
+//    #pragma omp parallel for collapse(2) schedule(dynamic)
     for (size_t ci = 0; ci < num_centroids; ci += centroid_block_size) {
         for (size_t dj = 0; dj < num_data; dj += data_block_size) {
             
@@ -173,7 +173,7 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     // Set thread count for this computation
     int original_threads = omp_get_max_threads();
     if (num_threads > 0) {
-        omp_set_num_threads(num_threads);
+        omp_set_num_threads(16);
     }
 
     const size_t num_centroids = centroids.size();

@@ -44,11 +44,11 @@ private:
         // For very large datasets, use more threads
         if (data_size > 500000)
         {
-            return std::min(224, max_threads);
+            return std::min(16, max_threads);
         }
         else if (data_size > 100000)
         {
-            return std::min(4, max_threads);
+            return std::min(16, max_threads);
         }
         else if (data_size > 50000)
         {

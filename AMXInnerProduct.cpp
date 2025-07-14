@@ -270,7 +270,6 @@ void AMXInnerProduct::padVectors(std::vector<std::vector<float>> &vectors)
     }
 }
 
-// Chunking method (now non-static to access timing variables)
 void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
                                std::vector<std::vector<float>> &centroids,
                                std::vector<std::vector<float>> &data)
@@ -282,7 +281,6 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
 
     float results_chunk[MAX_SIZE * MAX_SIZE];
     std::vector<std::vector<bfloat16_t>> centroid_chunk(centroids.size() * centroids[0].size() / (MAX_COLS * MAX_SIZE), std::vector<bfloat16_t>(MAX_COLS * MAX_SIZE));
-    std::vector<bfloat16_t> data_chunk(MAX_COLS * MAX_SIZE);
 
     // Chunk and format centroids
     auto start_conversion = std::chrono::high_resolution_clock::now();
@@ -301,18 +299,17 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
     auto end_conversion = std::chrono::high_resolution_clock::now();
     conversion_time += end_conversion - start_conversion;
 
-    // Tile init!
-    __tilecfg tile_data = {0};
-    init_tile_config(&tile_data);
-
-    int id = 0;
-    int centroid_id = 0;
+    // PRE-CONVERT ALL DATA CHUNKS AND TIME THEM SEPARATELY
+    std::vector<std::vector<bfloat16_t>> all_data_chunks;
+    static int conversion_count = 0;
 
     for (int offset = 0; offset < data.size(); offset += MAX_SIZE)
     {
         for (int d_offset = 0; d_offset < data[0].size(); d_offset += MAX_COLS)
         {
-            start_conversion = std::chrono::high_resolution_clock::now();
+            std::vector<bfloat16_t> data_chunk(MAX_COLS * MAX_SIZE);
+
+            auto start_conversion = std::chrono::high_resolution_clock::now();
             int k = 0;
             for (int i = 0; i < MAX_COLS; i += 2)
             {
@@ -322,22 +319,39 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
                     data_chunk[k++] = float_to_bfloat16(data[offset + j][d_offset + i + 1]);
                 }
             }
-            end_conversion = std::chrono::high_resolution_clock::now();
+            conversion_count++;
+            auto end_conversion = std::chrono::high_resolution_clock::now();
             conversion_time += end_conversion - start_conversion;
 
-            _tile_loadd(3, data_chunk.data(), STRIDE);
+            all_data_chunks.push_back(std::move(data_chunk));
+        }
+    }
+
+    // Tile init!
+    __tilecfg tile_data = {0};
+    init_tile_config(&tile_data);
+
+    int id = 0;
+    int centroid_id = 0;
+    int chunk_index = 0;
+
+    // NOW DO ALL THE COMPUTATION USING PRE-CONVERTED CHUNKS
+    for (int offset = 0; offset < data.size(); offset += MAX_SIZE)
+    {
+        for (int d_offset = 0; d_offset < data[0].size(); d_offset += MAX_COLS)
+        {
             auto start_multiply = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < centroid_height; ++i)
             {
                 _tile_zero(1);
                 _tile_loadd(2, centroid_chunk[centroid_id].data(), STRIDE);
+                _tile_loadd(3, all_data_chunks[chunk_index].data(), STRIDE);
 
                 _tile_dpbf16ps(1, 2, 3);
                 _tile_stored(1, results_chunk, STRIDE);
 
-                // Merge results
+                // Merge results (same as before)
                 int col_offset = (id / data_height) * MAX_SIZE;
-
                 for (int row = 0; row < MAX_SIZE; ++row)
                 {
                     if (row + 2 < MAX_SIZE)
@@ -351,14 +365,12 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
                     int col = 0;
                     for (; col <= MAX_SIZE - 16; col += 16)
                     {
-                        // Load and process first 8 elements
                         __m512 chunk_vec1 = _mm512_loadu_ps(&chunk_row[col]);
                         __m512 agg_vec1 = _mm512_loadu_ps(&agg_row[col]);
                         __m512 result1 = _mm512_add_ps(agg_vec1, chunk_vec1);
                         _mm512_storeu_ps(&agg_row[col], result1);
                     }
 
-                    // Handle remaining elements that don't fit in 16-element chunks
                     for (; col <= MAX_SIZE - 8; col += 8)
                     {
                         __m256 chunk_vec = _mm256_loadu_ps(&chunk_row[col]);
@@ -367,7 +379,6 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
                         _mm256_storeu_ps(&agg_row[col], result);
                     }
 
-                    // Handle any remaining elements (if MAX_SIZE is not divisible by 8)
                     for (; col < MAX_SIZE; ++col)
                     {
                         agg_row[col] += chunk_row[col];
@@ -379,10 +390,12 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
             auto end_multiply = std::chrono::high_resolution_clock::now();
             multiplication_time += end_multiply - start_multiply;
 
+            chunk_index++;
             id++;
         }
     }
 
+//    std::cout << "Conversion loop executed " << conversion_count << " times" << std::endl;
     auto end_chunking = std::chrono::high_resolution_clock::now();
     chunking_time += end_chunking - start_chunking;
     chunking_calls++;
