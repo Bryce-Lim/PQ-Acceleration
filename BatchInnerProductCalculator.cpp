@@ -173,7 +173,7 @@ std::vector<std::vector<float>> BatchInnerProductCalculator::calculateInnerProdu
     // Set thread count for this computation
     int original_threads = omp_get_max_threads();
     if (num_threads > 0) {
-        omp_set_num_threads(16);
+        omp_set_num_threads(num_threads);
     }
 
     const size_t num_centroids = centroids.size();

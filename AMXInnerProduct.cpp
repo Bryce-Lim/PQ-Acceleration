@@ -310,16 +310,16 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
             std::vector<bfloat16_t> data_chunk(MAX_COLS * MAX_SIZE);
 
             auto start_conversion = std::chrono::high_resolution_clock::now();
-            int k = 0;
-            for (int i = 0; i < MAX_COLS; i += 2)
-            {
-                for (int j = 0; j < MAX_SIZE; ++j)
-                {
-                    data_chunk[k++] = float_to_bfloat16(data[offset + j][d_offset + i]);
-                    data_chunk[k++] = float_to_bfloat16(data[offset + j][d_offset + i + 1]);
-                }
-            }
-            conversion_count++;
+            
+	    int k = 0;
+	    for (int i = 0; i < MAX_COLS; i += 2) {
+    		for (int j = 0; j < MAX_SIZE; ++j) {
+        	    data_chunk[k++] = float_to_bfloat16(data[offset + j][d_offset + i]);
+        	    data_chunk[k++] = float_to_bfloat16(data[offset + j][d_offset + i + 1]);
+    		}
+	    }	
+
+	    conversion_count++;
             auto end_conversion = std::chrono::high_resolution_clock::now();
             conversion_time += end_conversion - start_conversion;
 
@@ -335,12 +335,13 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
     int centroid_id = 0;
     int chunk_index = 0;
 
+    auto start_multiply = std::chrono::high_resolution_clock::now();
+
     // NOW DO ALL THE COMPUTATION USING PRE-CONVERTED CHUNKS
     for (int offset = 0; offset < data.size(); offset += MAX_SIZE)
     {
         for (int d_offset = 0; d_offset < data[0].size(); d_offset += MAX_COLS)
         {
-            auto start_multiply = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < centroid_height; ++i)
             {
                 _tile_zero(1);
@@ -370,30 +371,17 @@ void AMXInnerProduct::chunking(std::vector<std::vector<float>> &results_agg,
                         __m512 result1 = _mm512_add_ps(agg_vec1, chunk_vec1);
                         _mm512_storeu_ps(&agg_row[col], result1);
                     }
-
-                    for (; col <= MAX_SIZE - 8; col += 8)
-                    {
-                        __m256 chunk_vec = _mm256_loadu_ps(&chunk_row[col]);
-                        __m256 agg_vec = _mm256_loadu_ps(&agg_row[col]);
-                        __m256 result = _mm256_add_ps(agg_vec, chunk_vec);
-                        _mm256_storeu_ps(&agg_row[col], result);
-                    }
-
-                    for (; col < MAX_SIZE; ++col)
-                    {
-                        agg_row[col] += chunk_row[col];
-                    }
                 }
 
                 centroid_id = (centroid_id + 1) % centroid_chunk.size();
             }
-            auto end_multiply = std::chrono::high_resolution_clock::now();
-            multiplication_time += end_multiply - start_multiply;
-
             chunk_index++;
             id++;
         }
     }
+
+    auto end_multiply = std::chrono::high_resolution_clock::now();
+    multiplication_time += end_multiply - start_multiply;
 
 //    std::cout << "Conversion loop executed " << conversion_count << " times" << std::endl;
     auto end_chunking = std::chrono::high_resolution_clock::now();
@@ -544,7 +532,6 @@ std::vector<std::vector<float>> AMXInnerProduct::compute_inner_products_threaded
         partition_start_indices[t] = std::min((size_t)t * data_per_thread, data.size());
     }
 
-    #pragma omp parallel for
     for (int t = 0; t < num_threads; ++t)
     {
         if (!thread_results[t].success)

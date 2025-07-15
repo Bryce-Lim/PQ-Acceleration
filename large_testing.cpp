@@ -18,7 +18,7 @@
 
 // Define these constants based on your data
 const int dim = 1024;
-const int max_elements = 985600;
+const int max_elements = 896000;
 const int num_centroids = 1600;
 const int rounds = 10;
 const std::vector<int> thread_tests = {60, 80, 100, 112, 120, 160, 200, 224};
@@ -44,7 +44,7 @@ private:
         // For very large datasets, use more threads
         if (data_size > 500000)
         {
-            return std::min(16, max_threads);
+            return std::min(224, max_threads);
         }
         else if (data_size > 100000)
         {
